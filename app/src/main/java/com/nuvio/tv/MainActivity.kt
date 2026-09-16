@@ -877,9 +877,21 @@ open class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Navigate to content when launched from the Continue Watching channel row.
+                    // Navigate to content when launched externally.
+                    // Home Assistant can use launchMode=player to open an exact
+                    // resolved stream directly in Nuvio's internal player.
                     LaunchedEffect(navController) {
-                        if (launchContentId != null && launchContentType != null && layoutChosen) {
+                        if (!layoutChosen) return@LaunchedEffect
+
+                        val playerRoute = playerRouteFromIntent(intent)
+                        if (playerRoute != null) {
+                            navController.navigate(playerRoute) {
+                                launchSingleTop = true
+                            }
+                            return@LaunchedEffect
+                        }
+
+                        if (launchContentId != null && launchContentType != null) {
                             if (launchMode == "stream" && launchVideoId != null && launchName != null) {
                                 navController.navigate(
                                     Screen.Stream.createRoute(
@@ -911,25 +923,36 @@ open class MainActivity : ComponentActivity() {
 
                     val pendingLaunch by pendingLaunchIntent.collectAsState()
                     LaunchedEffect(navController, layoutChosen, pendingLaunch) {
-                        val intent = pendingLaunch ?: return@LaunchedEffect
+                        val launchIntent = pendingLaunch ?: return@LaunchedEffect
                         if (!layoutChosen) return@LaunchedEffect
                         pendingLaunchIntent.value = null
-                        val contentId = intent.getStringExtra("contentId") ?: return@LaunchedEffect
-                        val contentType = intent.getStringExtra("contentType") ?: return@LaunchedEffect
-                        val videoId = intent.getStringExtra("videoId")
-                        val name = intent.getStringExtra("name")
+
+                        val playerRoute = playerRouteFromIntent(launchIntent)
+                        if (playerRoute != null) {
+                            navController.navigate(playerRoute) {
+                                launchSingleTop = true
+                            }
+                            return@LaunchedEffect
+                        }
+
+                        val contentId = launchIntent.getStringExtra("contentId")
+                            ?: return@LaunchedEffect
+                        val contentType = launchIntent.getStringExtra("contentType")
+                            ?: return@LaunchedEffect
+                        val videoId = launchIntent.getStringExtra("videoId")
+                        val name = launchIntent.getStringExtra("name")
                         if (videoId != null && name != null) {
                             navController.navigate(
                                 Screen.Stream.createRoute(
                                     videoId = videoId,
                                     contentType = contentType,
                                     title = name,
-                                    poster = intent.getStringExtra("poster"),
-                                    backdrop = intent.getStringExtra("backdrop"),
-                                    logo = intent.getStringExtra("logo"),
-                                    season = intent.getIntExtra("season", -1).takeIf { it >= 0 },
-                                    episode = intent.getIntExtra("episode", -1).takeIf { it >= 0 },
-                                    episodeName = intent.getStringExtra("episodeTitle"),
+                                    poster = launchIntent.getStringExtra("poster"),
+                                    backdrop = launchIntent.getStringExtra("backdrop"),
+                                    logo = launchIntent.getStringExtra("logo"),
+                                    season = launchIntent.getIntExtra("season", -1).takeIf { it >= 0 },
+                                    episode = launchIntent.getIntExtra("episode", -1).takeIf { it >= 0 },
+                                    episodeName = launchIntent.getStringExtra("episodeTitle"),
                                     contentId = contentId,
                                     contentName = name,
                                     returnToDetailOnBack = contentType.equals("series", ignoreCase = true),
@@ -1259,10 +1282,101 @@ open class MainActivity : ComponentActivity() {
     }
 
     private fun captureLaunchIntent(intent: Intent?) {
-        val contentId = intent?.getStringExtra("contentId") ?: return
-        val launchMode = intent.getStringExtra("launchMode") ?: return
-        if (launchMode != "stream") return
-        pendingLaunchIntent.value = intent
+        val launchMode = intent?.getStringExtra("launchMode") ?: return
+        when (launchMode) {
+            "stream" -> {
+                if (intent.getStringExtra("contentId").isNullOrBlank()) return
+                pendingLaunchIntent.value = intent
+            }
+            "player" -> {
+                if (intent.getStringExtra("streamUrl").isNullOrBlank()) return
+                pendingLaunchIntent.value = intent
+            }
+        }
+    }
+
+    private fun playerRouteFromIntent(intent: Intent?): String? {
+        if (intent?.getStringExtra("launchMode") != "player") return null
+        val streamUrl = intent.getStringExtra("streamUrl")
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        val title = sequenceOf(
+            intent.getStringExtra("streamTitle"),
+            intent.getStringExtra("name"),
+            intent.getStringExtra("filename")
+        ).firstOrNull { !it.isNullOrBlank() } ?: "Nuvio"
+
+        val headers = intent.getStringExtra("headers")?.let { raw ->
+            runCatching {
+                val json = org.json.JSONObject(raw)
+                buildMap<String, String> {
+                    val keys = json.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        put(key, json.optString(key))
+                    }
+                }.takeIf { it.isNotEmpty() }
+            }.getOrNull()
+        }
+
+        val videoSize = if (intent.hasExtra("videoSize")) {
+            intent.getLongExtra("videoSize", 0L).takeIf { it > 0L }
+        } else {
+            null
+        }
+        val fileIdx = if (intent.hasExtra("fileIdx")) {
+            intent.getIntExtra("fileIdx", -1).takeIf { it >= 0 }
+        } else {
+            null
+        }
+        val profileId = if (intent.hasExtra("profileId")) {
+            intent.getIntExtra("profileId", -1).takeIf { it > 0 }
+        } else {
+            null
+        }
+        val season = if (intent.hasExtra("season")) {
+            intent.getIntExtra("season", -1).takeIf { it >= 0 }
+        } else {
+            null
+        }
+        val episode = if (intent.hasExtra("episode")) {
+            intent.getIntExtra("episode", -1).takeIf { it >= 0 }
+        } else {
+            null
+        }
+
+        return Screen.Player.createRoute(
+            streamUrl = streamUrl,
+            title = title,
+            streamName = intent.getStringExtra("streamName"),
+            year = intent.getStringExtra("year"),
+            headers = headers,
+            contentId = intent.getStringExtra("contentId"),
+            contentType = intent.getStringExtra("contentType"),
+            contentName = intent.getStringExtra("name"),
+            poster = intent.getStringExtra("poster"),
+            backdrop = intent.getStringExtra("backdrop"),
+            logo = intent.getStringExtra("logo"),
+            videoId = intent.getStringExtra("videoId"),
+            season = season,
+            episode = episode,
+            episodeTitle = intent.getStringExtra("episodeTitle"),
+            bingeGroup = intent.getStringExtra("bingeGroup"),
+            returnToHomeOnBack = true,
+            filename = intent.getStringExtra("filename"),
+            videoHash = intent.getStringExtra("videoHash"),
+            videoSize = videoSize,
+            startFromBeginning = intent.getBooleanExtra("startFromBeginning", false),
+            addonName = intent.getStringExtra("addonName"),
+            addonLogo = intent.getStringExtra("addonLogo"),
+            streamDescription = intent.getStringExtra("streamDescription"),
+            infoHash = intent.getStringExtra("infoHash"),
+            fileIdx = fileIdx,
+            sources = intent.getStringArrayListExtra("sources")?.toList(),
+            contentLanguage = intent.getStringExtra("contentLanguage"),
+            profileId = profileId
+        )
     }
 
     override fun onPause() {
