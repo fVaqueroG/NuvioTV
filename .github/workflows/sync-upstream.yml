@@ -1,0 +1,39 @@
+name: Sync official Nuvio upstream
+
+on:
+  schedule:
+    - cron: "23 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-nuvio-upstream-dev
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Merge official dev branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/NuvioMedia/NuvioTV.git
+          git fetch upstream dev --tags
+
+          if git merge-base --is-ancestor upstream/dev HEAD; then
+            echo "Fork already contains the latest official Android changes."
+            exit 0
+          fi
+
+          git merge --no-edit upstream/dev
+          git push origin HEAD:dev
