@@ -1,4 +1,4 @@
-name: HA Direct Play Test Build
+name: HA Direct Play Android Build
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ha-direct-play-android-${{ github.ref }}
@@ -16,6 +16,9 @@ jobs:
   build:
     name: Build HA-compatible Android APK
     runs-on: ubuntu-latest
+    env:
+      HA_ANDROID_KEYSTORE_BASE64: ${{ secrets.HA_ANDROID_KEYSTORE_BASE64 }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,30 +44,135 @@ jobs:
           EOF
           : > local.dev.properties
 
-      - name: Create CI signing key
+      - name: Prepare HA package and monotonic version
         shell: bash
         run: |
-          keytool -genkeypair -v \
-            -keystore "$RUNNER_TEMP/ha-direct-play.jks" \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -dname "CN=HA Direct Play,O=Nuvio Fork,C=US" \
-            -keyalg RSA -keysize 2048 -validity 10000
+          python3 <<'PY'
+          import os
+          import pathlib
+          import re
+
+          path = pathlib.Path("app/build.gradle.kts")
+          source = path.read_text()
+
+          code_match = re.search(r'(?m)^\s*versionCode\s*=\s*(\d+)\s*$', source)
+          name_match = re.search(r'(?m)^\s*versionName\s*=\s*"([^"]+)"\s*$', source)
+          if not code_match or not name_match:
+              raise SystemExit("Could not read Android versionCode/versionName")
+
+          base_code = int(code_match.group(1))
+          base_name = name_match.group(1)
+          run = int(os.environ["GITHUB_RUN_NUMBER"])
+          # Preserve upstream ordering while leaving plenty of room for our builds.
+          version_code = base_code * 100000 + run
+          if version_code >= 2100000000:
+              raise SystemExit(f"Generated Android versionCode is too large: {version_code}")
+          version_name = f"{base_name}-ha.{run}"
+
+          source = re.sub(
+              r'(?m)^(\s*)versionCode\s*=\s*\d+\s*$',
+              rf'\g<1>versionCode = {version_code}',
+              source,
+              count=1,
+          )
+          source = re.sub(
+              r'(?m)^(\s*)versionName\s*=\s*"[^"]+"\s*$',
+              rf'\g<1>versionName = "{version_name}"',
+              source,
+              count=1,
+          )
+          # Keep the HA fork alongside the official Nuvio installation.
+          source = source.replace(
+              'applicationId = "com.nuvio.tv"',
+              'applicationId = "com.nuvio.tv.ha"',
+              1,
+          )
+          # Obtainium owns updates for this build; do not offer official Nuvio APKs.
+          source = source.replace(
+              'buildConfigField("boolean", "FEATURE_IN_APP_UPDATES_ENABLED", "true")',
+              'buildConfigField("boolean", "FEATURE_IN_APP_UPDATES_ENABLED", "false")',
+              1,
+          )
+          path.write_text(source)
+
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"HA_VERSION_CODE={version_code}\n")
+              env.write(f"HA_VERSION_NAME={version_name}\n")
+              env.write("HA_PACKAGE_ID=com.nuvio.tv.ha\n")
+          print(f"HA Android build: {version_name} ({version_code})")
+          PY
+
+      - name: Configure APK signing
+        shell: bash
+        run: |
+          KEYSTORE="$RUNNER_TEMP/nuvio-ha.jks"
+          if [ -n "$HA_ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$HA_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+            echo "HA_PERSISTENT_SIGNING=true" >> "$GITHUB_ENV"
+            echo "Using persistent HA signing key; GitHub Release publishing is enabled."
+          else
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE" \
+              -storepass nuvio-ha \
+              -alias nuvio-ha \
+              -keypass nuvio-ha \
+              -dname "CN=Nuvio HA Android,O=fVaqueroG,C=MX" \
+              -keyalg RSA -keysize 2048 -validity 10000
+            echo "HA_PERSISTENT_SIGNING=false" >> "$GITHUB_ENV"
+            echo "::warning::HA_ANDROID_KEYSTORE_BASE64 is not configured. The APK will be an Actions artifact only and cannot be used for reliable in-place updates."
+          fi
           {
-            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/ha-direct-play.jks"
-            echo "NUVIO_RELEASE_KEY_ALIAS=androiddebugkey"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=android"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=android"
+            echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE"
+            echo "NUVIO_RELEASE_KEY_ALIAS=nuvio-ha"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=nuvio-ha"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=nuvio-ha"
           } >> "$GITHUB_ENV"
 
-      - name: Compile and build fullDebug APK
+      - name: Compile and build HA APK
         run: ./gradlew :app:assembleFullDebug --stacktrace
 
-      - name: Upload APK
+      - name: Normalize APK name
+        shell: bash
+        run: |
+          SOURCE="app/build/outputs/apk/full/debug/app-full-universal-debug.apk"
+          TARGET="NuvioTV-HA-Android-${HA_VERSION_NAME}.apk"
+          test -f "$SOURCE"
+          cp "$SOURCE" "$TARGET"
+          echo "HA_APK=$TARGET" >> "$GITHUB_ENV"
+          echo "HA_RELEASE_TAG=ha-android-${HA_VERSION_CODE}" >> "$GITHUB_ENV"
+
+      - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: nuvio-ha-direct-play-android
-          path: app/build/outputs/apk/full/debug/app-full-universal-debug.apk
+          path: ${{ env.HA_APK }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish Obtainium GitHub Release
+        if: env.HA_PERSISTENT_SIGNING == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          NOTES="HA-compatible Nuvio Android TV build. Package: ${HA_PACKAGE_ID}. Tracks NuvioMedia/NuvioTV while preserving Home Assistant direct-play support. Android versionCode: ${HA_VERSION_CODE}."
+          if gh release view "$HA_RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$HA_RELEASE_TAG" "$HA_APK" --clobber
+          else
+            gh release create "$HA_RELEASE_TAG" \
+              "$HA_APK" \
+              --title "Nuvio TV HA Android ${HA_VERSION_NAME}" \
+              --notes "$NOTES" \
+              --latest
+          fi
+
+      - name: Signing setup reminder
+        if: env.HA_PERSISTENT_SIGNING != 'true'
+        shell: bash
+        run: |
+          {
+            echo "### Obtainium publishing is waiting for one secret"
+            echo
+            echo "Add the repository secret \`HA_ANDROID_KEYSTORE_BASE64\`, then run this workflow again."
+            echo "The workflow will keep producing test APK artifacts until that secret exists."
+          } >> "$GITHUB_STEP_SUMMARY"
