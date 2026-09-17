@@ -3,9 +3,6 @@ name: HA Direct Play Test Build
 on:
   push:
     branches: [dev]
-    paths:
-      - "app/src/main/java/com/nuvio/tv/MainActivity.kt"
-      - ".github/workflows/ha-direct-play-build.yml"
   workflow_dispatch:
 
 permissions:
