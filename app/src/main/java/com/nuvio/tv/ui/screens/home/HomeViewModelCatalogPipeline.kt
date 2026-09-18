@@ -551,33 +551,45 @@ internal fun HomeViewModel.loadMoreCatalogItemsPipeline(catalogId: String, addon
         }
 
         val nextSkip = currentRow.nextCatalogSkip()
-        catalogRepository.getCatalog(
-            addonBaseUrl = addon.baseUrl,
-            addonId = addon.id,
-            addonName = addon.displayName,
-            catalogId = catalogId,
-            catalogName = currentRow.catalogName,
-            type = currentRow.apiType,
-            skip = nextSkip,
-            skipStep = currentRow.skipStep,
-            supportsSkip = currentRow.supportsSkip
-        ).collect { result ->
-            when (result) {
-                is NetworkResult.Success -> {
-                    updateCatalogRow(key) { latestRow ->
-                        val mergedRow = latestRow.mergeCatalogPage(result.data)
-                        mergedRow
+        val completedWithinTimeout = withTimeoutOrNull(HOME_CATALOG_REQUEST_TIMEOUT_MS) {
+            catalogRepository.getCatalog(
+                addonBaseUrl = addon.baseUrl,
+                addonId = addon.id,
+                addonName = addon.displayName,
+                catalogId = catalogId,
+                catalogName = currentRow.catalogName,
+                type = currentRow.apiType,
+                skip = nextSkip,
+                skipStep = currentRow.skipStep,
+                supportsSkip = currentRow.supportsSkip
+            ).collect { result ->
+                when (result) {
+                    is NetworkResult.Success -> {
+                        updateCatalogRow(key) { latestRow ->
+                            latestRow.mergeCatalogPage(result.data)
+                        }
+                        _loadingCatalogs.update { it - key }
+                        scheduleUpdateCatalogRows()
                     }
-                    _loadingCatalogs.update { it - key }
-                    scheduleUpdateCatalogRows()
+                    is NetworkResult.Error -> {
+                        updateCatalogRow(key) { it.copy(isLoading = false) }
+                        _loadingCatalogs.update { it - key }
+                        scheduleUpdateCatalogRows()
+                    }
+                    NetworkResult.Loading -> Unit
                 }
-                is NetworkResult.Error -> {
-                    updateCatalogRow(key) { it.copy(isLoading = false) }
-                    _loadingCatalogs.update { it - key }
-                    scheduleUpdateCatalogRows()
-                }
-                NetworkResult.Loading -> { }
             }
+            true
+        } ?: false
+
+        if (!completedWithinTimeout) {
+            updateCatalogRow(key) { it.copy(isLoading = false) }
+            _loadingCatalogs.update { it - key }
+            Log.w(
+                HomeViewModel.TAG,
+                "Home catalog pagination timed out after ${HOME_CATALOG_REQUEST_TIMEOUT_MS}ms addonId=${addon.id} type=${currentRow.apiType} catalogId=$catalogId"
+            )
+            scheduleUpdateCatalogRows()
         }
     }
 }
