@@ -134,8 +134,8 @@ jobs:
       - name: Normalize APK name
         shell: bash
         run: |
-          SOURCE="app/build/outputs/apk/full/debug/app-full-universal-debug.apk"
-          TARGET="NuvioTV-HA-Android-${HA_VERSION_NAME}.apk"
+          SOURCE="app/build/outputs/apk/full/debug/app-full-armeabi-v7a-debug.apk"
+          TARGET="NuvioTV-HA-Android-armeabi-v7a-${HA_VERSION_NAME}.apk"
           test -f "$SOURCE"
           cp "$SOURCE" "$TARGET"
           echo "HA_APK=$TARGET" >> "$GITHUB_ENV"
@@ -155,7 +155,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          NOTES="HA-compatible Nuvio Android TV build. Package: ${HA_PACKAGE_ID}. Tracks NuvioMedia/NuvioTV while preserving Home Assistant direct-play support. Android versionCode: ${HA_VERSION_CODE}."
+          NOTES="HA-compatible Nuvio Android TV build for armeabi-v7a devices (including Xiaomi Mi TV Stick MiTV-AESP0). Package: ${HA_PACKAGE_ID}. Tracks NuvioMedia/NuvioTV while preserving Home Assistant direct-play support. Android versionCode: ${HA_VERSION_CODE}."
           if gh release view "$HA_RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$HA_RELEASE_TAG" "$HA_APK" --clobber
           else
