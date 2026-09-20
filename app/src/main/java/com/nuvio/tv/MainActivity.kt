@@ -929,7 +929,14 @@ open class MainActivity : ComponentActivity() {
 
                         val playerRoute = playerRouteFromIntent(launchIntent)
                         if (playerRoute != null) {
+                            // A new external source replaces an active player session;
+                            // singleTop alone can reuse the old paused PlayerScreen.
+                            val replacingActivePlayer =
+                                navController.currentDestination?.route == Screen.Player.route
                             navController.navigate(playerRoute) {
+                                if (replacingActivePlayer) {
+                                    popUpTo(Screen.Player.route) { inclusive = true }
+                                }
                                 launchSingleTop = true
                             }
                             return@LaunchedEffect
