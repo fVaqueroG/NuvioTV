@@ -22,7 +22,7 @@ jobs:
           ref: dev
           fetch-depth: 0
 
-      - name: Merge official dev branch
+      - name: Merge official dev branch without upstream workflows
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -35,5 +35,9 @@ jobs:
             exit 0
           fi
 
-          git merge --no-edit upstream/dev
+          # The Actions GITHUB_TOKEN cannot modify workflow files. Preserve the
+          # fork's own workflows and merge the upstream application code only.
+          git merge --no-commit --no-ff upstream/dev
+          git restore --source=HEAD --staged --worktree -- .github/workflows/
+          git commit -m "Merge official Nuvio dev while retaining fork workflows"
           git push origin HEAD:dev
