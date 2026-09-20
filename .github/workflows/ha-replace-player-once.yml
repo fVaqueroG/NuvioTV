@@ -19,52 +19,42 @@ jobs:
           from pathlib import Path
           p = Path('app/src/main/java/com/nuvio/tv/MainActivity.kt')
           s = p.read_text()
-          old = '''                    val pendingLaunch by pendingLaunchIntent.collectAsState()
-                    LaunchedEffect(navController, layoutChosen, pendingLaunch) {
-                        val launchIntent = pendingLaunch ?: return@LaunchedEffect
-                        if (!layoutChosen) return@LaunchedEffect
-                        pendingLaunchIntent.value = null
-
-                        val playerRoute = playerRouteFromIntent(launchIntent)
-                        if (playerRoute != null) {
-                            navController.navigate(playerRoute) {
-                                launchSingleTop = true
-                            }
-                            return@LaunchedEffect
-                        }
-          '''
-          new = '''                    val pendingLaunch by pendingLaunchIntent.collectAsState()
-                    LaunchedEffect(navController, layoutChosen, pendingLaunch) {
-                        val launchIntent = pendingLaunch ?: return@LaunchedEffect
-                        if (!layoutChosen) return@LaunchedEffect
-                        pendingLaunchIntent.value = null
-
-                        val playerRoute = playerRouteFromIntent(launchIntent)
-                        if (playerRoute != null) {
-                            // A new HA source must replace an active player destination.
-                            // SingleTop alone reuses the current PlayerScreen and can
-                            // leave its previous ExoPlayer session paused instead of
-                            // initializing playback for the newly received stream URL.
-                            val replacingActivePlayer =
-                                navController.currentDestination?.route == Screen.Player.route
-                            navController.navigate(playerRoute) {
-                                if (replacingActivePlayer) {
-                                    popUpTo(Screen.Player.route) { inclusive = true }
-                                }
-                                launchSingleTop = true
-                            }
-                            return@LaunchedEffect
-                        }
-          '''
-          if old not in s:
-              if new in s:
-                  print('Fix is already applied')
-              else:
-                  raise SystemExit('Expected pending-launch navigation block not found')
+          anchor = 'val pendingLaunch by pendingLaunchIntent.collectAsState()'
+          assert s.count(anchor) == 1
+          before, after = s.split(anchor, 1)
+          def block(lines):
+              return '\n'.join(' ' * (24 + offset) + text for offset, text in lines)
+          old = block([
+              (0, 'if (playerRoute != null) {'),
+              (4, 'navController.navigate(playerRoute) {'),
+              (8, 'launchSingleTop = true'),
+              (4, '}'),
+              (4, 'return@LaunchedEffect'),
+              (0, '}'),
+          ])
+          new = block([
+              (0, 'if (playerRoute != null) {'),
+              (4, '// A new external source replaces an active player session;'),
+              (4, '// singleTop alone can reuse the old paused PlayerScreen.'),
+              (4, 'val replacingActivePlayer ='),
+              (8, 'navController.currentDestination?.route == Screen.Player.route'),
+              (4, 'navController.navigate(playerRoute) {'),
+              (8, 'if (replacingActivePlayer) {'),
+              (12, 'popUpTo(Screen.Player.route) { inclusive = true }'),
+              (8, '}'),
+              (8, 'launchSingleTop = true'),
+              (4, '}'),
+              (4, 'return@LaunchedEffect'),
+              (0, '}'),
+          ])
+          if old in after:
+              assert after.count(old) == 1
+              p.write_text(before + anchor + after.replace(old, new, 1))
+              print('Replaced active player navigation for new intents')
+          elif new in after:
+              print('Fix is already present')
           else:
-              assert s.count(old) == 1
-              p.write_text(s.replace(old,new,1))
-          print('Android external-player replacement branch verified')
+              raise SystemExit('Pending-intent player block does not match; no changes made')
           PY
           git diff --check
       - name: Commit source fix only
