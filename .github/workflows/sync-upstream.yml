@@ -1,12 +1,17 @@
 name: Sync official Nuvio upstream
 
 on:
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/sync-upstream.yml
   schedule:
     - cron: "23 10 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: sync-nuvio-upstream-dev
@@ -24,6 +29,8 @@ jobs:
 
       - name: Merge official dev branch without upstream workflows
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -35,9 +42,14 @@ jobs:
             exit 0
           fi
 
-          # The Actions GITHUB_TOKEN cannot modify workflow files. Preserve the
-          # fork's own workflows and merge the upstream application code only.
+          # GITHUB_TOKEN cannot modify workflow files on push. Keep our existing
+          # workflows while incorporating official application and resource changes.
           git merge --no-commit --no-ff upstream/dev
           git restore --source=HEAD --staged --worktree -- .github/workflows/
           git commit -m "Merge official Nuvio dev while retaining fork workflows"
           git push origin HEAD:dev
+
+          # A push made with GITHUB_TOKEN does not trigger the ordinary push
+          # build workflow. workflow_dispatch does trigger it and produces the
+          # signed HA APK and Obtainium GitHub Release for the merged version.
+          gh workflow run ha-direct-play-build.yml --ref dev
