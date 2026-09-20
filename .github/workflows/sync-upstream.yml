@@ -39,6 +39,11 @@ jobs:
 
           if git merge-base --is-ancestor upstream/dev HEAD; then
             echo "Fork already contains the latest official Android changes."
+            # A workflow fix committed to dev can require a new APK even when
+            # there are no newer official application commits to merge.
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              gh workflow run ha-direct-play-build.yml --repo "${GITHUB_REPOSITORY}" --ref dev
+            fi
             exit 0
           fi
 
