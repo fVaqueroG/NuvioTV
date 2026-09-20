@@ -49,7 +49,6 @@ jobs:
           git commit -m "Merge official Nuvio dev while retaining fork workflows"
           git push origin HEAD:dev
 
-          # A push made with GITHUB_TOKEN does not trigger the ordinary push
-          # build workflow. workflow_dispatch does trigger it and produces the
-          # signed HA APK and Obtainium GitHub Release for the merged version.
-          gh workflow run ha-direct-play-build.yml --ref dev
+          # GITHUB_TOKEN pushes do not trigger push workflows, so explicitly
+          # dispatch our build in this fork, not the official upstream repo.
+          gh workflow run ha-direct-play-build.yml --repo "${GITHUB_REPOSITORY}" --ref dev
